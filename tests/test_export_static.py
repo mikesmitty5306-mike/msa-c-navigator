@@ -89,7 +89,8 @@ def test_status_change_survives_exports_and_cache_rebuild(research,monkeypatch):
     m.refresh(db2,user,'trials',public_dir=out,notify=False)
     s = Store(db2)
     assert s.conn.execute('SELECT previous_status FROM trial_status_history').fetchone()[0]=='COMPLETED'
-    assert s.conn.execute('SELECT count(*) FROM push_events').fetchone()[0]==1
+    # Retain public status history, but a fresh cache is a silent push baseline.
+    assert s.conn.execute('SELECT count(*) FROM push_events').fetchone()[0]==0
     s.close()
 
 

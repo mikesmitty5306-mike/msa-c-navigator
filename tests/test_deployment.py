@@ -1,5 +1,6 @@
 """Focused, offline deployment safety checks. No browser or live Web Push calls."""
 from datetime import datetime,timezone
+from dataclasses import replace
 import json
 from pathlib import Path
 import re
@@ -204,3 +205,118 @@ def test_setup_keeps_restricted_default_and_recommends_https_subject():
     assert 'https://<user>.github.io/<repo>' in setup
     assert 'no personal email is needed for push' in setup
     assert 'does\nnot trigger another `push` workflow run' in setup
+
+
+@pytest.mark.parametrize('previous_export',[True,False])
+def test_cache_miss_is_silent_baseline_then_only_new_changes_notify(state,tmp_path,monkeypatch,previous_export):
+    db,user,out = state
+    db.unlink()  # Model an absent Actions cache, not an empty API response.
+    if not previous_export:
+        out = tmp_path/'first-export'
+    revision = ['v2']
+    items = [Trial(nct_id='NCT00000001',title='MSA trial',status='COMPLETED',conditions=['Multiple System Atrophy']),
+             Trial(nct_id='NCT00000002',title='Another MSA trial',status='RECRUITING',conditions=['Multiple System Atrophy'])]
+    downloads = []
+    monkeypatch.setattr(m.http,'get_json',lambda *a:{'dataTimestamp':revision[0]})
+    def trials():
+        downloads.append(revision[0])
+        return iter(items)
+    monkeypatch.setattr(m.clinicaltrials,'search',trials)
+    for module in (m.pubmed,m.europepmc):
+        monkeypatch.setattr(module,'search',lambda **kw:iter([Article(uid='pmid:1',title='Multiple system atrophy',sources=['pubmed','europepmc'])]))
+    deliveries,attempts = [],[]
+    env = dict(PUSH_SUBSCRIPTION=json.dumps({'endpoint':'https://example.test/phone','keys':{'auth':'a','p256dh':'p'}}),
+               VAPID_PRIVATE_KEY='key',VAPID_PUBLIC_KEY='public',VAPID_SUBJECT='mailto:test@example.org')
+    def deliver(store):
+        attempts.append(1)
+        return push.send_pending(store,environ=env,sender=lambda **kw:deliveries.append(json.loads(kw['data'])))
+    monkeypatch.setattr(static_build,'send_pending',deliver)
+
+    assert static_build.scheduled(db,user,out=out,backup_dir=tmp_path/'backups',now=NOW)
+    assert not deliveries and not attempts
+    s = Store(db)
+    assert m.state(s,'trials_timestamp')=='v2'
+    assert m.state(s,'push_baseline_pending')=='0'
+    assert s.conn.execute('SELECT count(*) FROM push_events').fetchone()[0]==0
+    assert s.get_trial('NCT00000001').status=='COMPLETED'
+    s.close()
+    exported = json.loads((out/'trials.json').read_text())['trials']
+    if previous_export:
+        change = next(t for t in exported if t['id']=='NCT00000001')['status_changed']
+        assert change['from']=='RECRUITING' and change['to']=='COMPLETED'
+    assert json.loads((out/'meta.json').read_text())['sources']['clinicaltrials']['data_timestamp']=='v2'
+
+    # The next unchanged run neither downloads trials nor replays baseline alerts.
+    assert not static_build.scheduled(db,user,out=out,now=NOW.replace(hour=7))
+    assert downloads==['v2'] and not deliveries
+    revision[0] = 'v3'
+    items[0] = replace(items[0],status='RECRUITING')
+    items.append(Trial(nct_id='NCT00000003',title='New MSA trial',status='RECRUITING',conditions=['Multiple System Atrophy']))
+    assert static_build.scheduled(db,user,out=out,now=NOW.replace(hour=8))
+    assert downloads==['v2','v3']
+    assert {p['url'] for p in deliveries}=={'#/trials/NCT00000001','#/trials/NCT00000003'}
+    assert len(deliveries)==2
+
+
+def test_interrupted_cache_rebuild_remains_silent_until_successful_export(state,tmp_path,monkeypatch):
+    db,user,out = state
+    db.unlink()
+    before = (out/'meta.json').read_bytes()
+    revision,fail_papers = ['v2'],[True]
+    items = [Trial(nct_id='NCT00000001',title='MSA trial',status='COMPLETED',conditions=['Multiple System Atrophy']),
+             Trial(nct_id='NCT00000002',title='MSA baseline trial',status='RECRUITING',conditions=['Multiple System Atrophy'])]
+    monkeypatch.setattr(m.http,'get_json',lambda *a:{'dataTimestamp':revision[0]})
+    monkeypatch.setattr(m.clinicaltrials,'search',lambda:iter(items))
+    def papers(**kw):
+        if fail_papers[0]:
+            raise FetchError('Literature temporarily unavailable')
+        return iter([Article(uid='pmid:1',title='Multiple system atrophy',sources=['pubmed'])])
+    monkeypatch.setattr(m.pubmed,'search',papers)
+    monkeypatch.setattr(m.europepmc,'search',lambda **kw:iter([Article(uid='pmid:1',title='Multiple system atrophy',sources=['europepmc'])]))
+    monkeypatch.setattr(static_build,'send_pending',lambda *a:pytest.fail('No delivery during the initial or resumed baseline'))
+    with pytest.raises(RuntimeError,match='Literature refresh failed'):
+        static_build.scheduled(db,user,out=out,backup_dir=tmp_path/'backups',now=NOW)
+    assert (out/'meta.json').read_bytes()==before
+    s = Store(db)
+    assert m.state(s,'trials_timestamp')=='v2'
+    assert m.state(s,'push_baseline_pending')=='1'
+    assert s.conn.execute('SELECT count(*) FROM push_events').fetchone()[0]==0
+    s.close()
+
+    # SQLite now has trials, but this is still the interrupted cache-miss rebuild.
+    # A newer registry revision must not turn retry-time changes into alerts.
+    fail_papers[0],revision[0] = False,'v3'
+    items[0] = replace(items[0],status='TERMINATED')
+    items.append(Trial(nct_id='NCT00000003',title='Another baseline MSA trial',status='RECRUITING',conditions=['Multiple System Atrophy']))
+    assert static_build.scheduled(db,user,out=out,backup_dir=tmp_path/'backups',now=NOW.replace(hour=7))
+    s = Store(db)
+    assert m.state(s,'trials_timestamp')=='v3'
+    assert m.state(s,'push_baseline_pending')=='0'
+    assert s.conn.execute('SELECT count(*) FROM push_events').fetchone()[0]==0
+    s.close()
+
+
+def test_cached_baseline_is_not_replayed_against_an_older_publication(state,tmp_path,monkeypatch):
+    db,user,published = state
+    db.unlink()
+    revision = ['v2']
+    items = [Trial(nct_id='NCT00000001',title='MSA baseline trial',status='COMPLETED',conditions=['Multiple System Atrophy']),
+             Trial(nct_id='NCT00000002',title='MSA baseline open trial',status='RECRUITING',conditions=['Multiple System Atrophy'])]
+    monkeypatch.setattr(m.http,'get_json',lambda *a:{'dataTimestamp':revision[0]})
+    monkeypatch.setattr(m.clinicaltrials,'search',lambda:iter(items))
+    for module in (m.pubmed,m.europepmc):
+        monkeypatch.setattr(module,'search',lambda **kw:iter([Article(uid='pmid:1',title='Multiple system atrophy',sources=['pubmed'])]))
+    deliveries = []
+    env = dict(PUSH_SUBSCRIPTION=json.dumps({'endpoint':'https://example.test/phone','keys':{'auth':'a','p256dh':'p'}}),
+               VAPID_PRIVATE_KEY='key',VAPID_PUBLIC_KEY='public',VAPID_SUBJECT='mailto:test@example.org')
+    monkeypatch.setattr(static_build,'send_pending',lambda store:push.send_pending(
+        store,environ=env,sender=lambda **kw:deliveries.append(json.loads(kw['data']))))
+
+    # The rebuild/export succeeded, but simulate it not becoming the repository's
+    # published snapshot: the next checkout still contains the older public data.
+    assert static_build.scheduled(db,user,out=tmp_path/'unpublished-candidate',backup_dir=tmp_path/'backups',now=NOW)
+    assert not deliveries
+    revision[0] = 'v3'
+    items.append(Trial(nct_id='NCT00000003',title='Genuinely new MSA trial',status='RECRUITING',conditions=['Multiple System Atrophy']))
+    assert static_build.scheduled(db,user,out=published,now=NOW.replace(hour=7))
+    assert [p['url'] for p in deliveries]==['#/trials/NCT00000003']

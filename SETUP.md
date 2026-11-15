@@ -99,6 +99,11 @@ Each hourly run at `:17` follows this sequence (GitHub can delay scheduled runs)
 
 1. Restore the cached working research SQLite database. A cache miss causes a
    full rebuild during this refresh, while the existing site remains available.
+   This rebuild is a **silent notification baseline**: it records current trials
+   and public status history without sending new-trial or status-change alerts.
+   The baseline remains silent across failed/interrupted rebuild retries until
+   the complete refresh and validated export succeed. Subsequent genuine changes
+   can notify normally; an unchanged follow-up does not replay baseline alerts.
 2. Read ClinicalTrials.gov API v2 `/version` and record the check. If its
    `dataTimestamp` changed, download all MSA trials again, update their status
    history, and queue eligible trial alerts. An unchanged timestamp avoids the

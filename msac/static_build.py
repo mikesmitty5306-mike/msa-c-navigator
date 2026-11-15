@@ -43,6 +43,10 @@ def scheduled(db, user_db, *, out='public-data', backup_dir=None, force=False, n
                 missing_papers = any(maintenance.state(store,s+'_since') is None for s in ('pubmed','europepmc'))
                 daily_due = missing_papers or (now.hour>=6 and maintenance.state(store,'daily_day')!=today)
                 cache_trials_missing = maintenance.state(store,'trials_timestamp') is None
+                baseline_pending = cache_trials_missing or maintenance.state(store,'push_baseline_pending') == '1'
+                if baseline_pending:
+                    with store.conn:
+                        maintenance.set_state(store,'push_baseline_pending','1')
             finally:
                 store.close()
         # Always record the hourly check. Unchanged timestamps avoid the studies request.
@@ -57,7 +61,7 @@ def scheduled(db, user_db, *, out='public-data', backup_dir=None, force=False, n
                     "AND source IN ('clinicaltrials','pubmed','europepmc') GROUP BY source")}
                 unpublished = any(old.get('sources',{}).get(s,{}).get('refreshed_at')!=t for s,t in latest.items())
                 public_key_changed = bool(os.environ.get('VAPID_PUBLIC_KEY')) and os.environ['VAPID_PUBLIC_KEY']!=old.get('push_public_key')
-                publish = bool(force or changed or cache_trials_missing or daily_due or unpublished
+                publish = bool(force or changed or cache_trials_missing or baseline_pending or daily_due or unpublished
                                or public_key_changed or old.get('generated_at','')[:7]!=month)
                 if publish:
                     counts = store.stats()
@@ -81,7 +85,15 @@ def scheduled(db, user_db, *, out='public-data', backup_dir=None, force=False, n
         with maintenance.maintenance_lock(db):
             store = Store(db)
             try:
-                send_pending(store)
+                if baseline_pending:
+                    # Persist completion only after the entire refresh/export succeeded.
+                    # Keep any stale attempts terminal so retries cannot replay baseline alerts.
+                    with store.conn:
+                        store.conn.execute("UPDATE push_events SET state='baseline' WHERE state='pending'")
+                        maintenance.set_state(store,'push_baseline_pending','0')
+                    print('Research cache rebuilt: recorded a silent notification baseline.')
+                else:
+                    send_pending(store)
             finally:
                 store.close()
         deployed_change = force or (meta_path.exists() and meta_path.read_bytes()!=old_meta_raw)

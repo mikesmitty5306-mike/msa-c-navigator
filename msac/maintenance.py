@@ -75,9 +75,11 @@ def _refresh_source(store, source, *, timestamp=None, previous_trials=None):
         with store.conn:
             if source == 'clinicaltrials':
                 from .push import detect_events
-                before = {t.nct_id: t for t in store.iter_trials()}
-                if previous_trials:
-                    before.update(previous_trials)
+                # Published data fills a missing cache; an existing cache is the
+                # authoritative observed state, including a silent rebuild whose
+                # subsequent website deployment may have failed.
+                before = dict(previous_trials or {})
+                before.update({t.nct_id: t for t in store.iter_trials()})
                 for item in items:
                     count += pipeline.save_trial(store, item)
                 after = {t.nct_id: t for t in store.iter_trials()}
@@ -88,8 +90,9 @@ def _refresh_source(store, source, *, timestamp=None, previous_trials=None):
                             'ON CONFLICT(nct_id) DO UPDATE SET previous_status=excluded.previous_status, '
                             'status=excluded.status, changed_date=excluded.changed_date',
                             (nct_id,old.status,trial.status,datetime.now(timezone.utc).date().isoformat()))
-                # First import establishes a baseline rather than notifying about historical trials.
-                if state(store, 'trials_timestamp') is not None or previous_trials:
+                # A previous public export supplies status history, not proof that
+                # this working cache has completed its silent notification baseline.
+                if state(store, 'trials_timestamp') is not None and state(store, 'push_baseline_pending') != '1':
                     for event in detect_events(before, after, timestamp):
                         store.conn.execute('INSERT OR IGNORE INTO push_events(id,payload) VALUES (?,?)',
                                            (event['id'], json.dumps(event['payload'])))
