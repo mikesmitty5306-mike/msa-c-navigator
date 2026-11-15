@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 330
     permissions:
       # This is the only job that commits public-data/ back to main.
@@ -117,7 +117,7 @@ jobs:
   deploy:
     needs: build
     if: needs.build.result == 'success' && needs.build.outputs.deploy == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       pages: write
@@ -132,7 +132,7 @@ jobs:
   test-push:
     needs: [build, deploy]
     if: github.event_name == 'workflow_dispatch' && inputs.send_test_push == true && needs.deploy.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
