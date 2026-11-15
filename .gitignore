@@ -1,0 +1,14 @@
+/data/
+__pycache__/
+.pytest_cache/
+*.sqlite3*
+/backups/
+*.maintenance-lock
+*.private.json
+# build output and local-only files
+/_site/
+/_sample_site/
+/.env
+/.idea/
+/.claude/
+data/maintenance-internal.json

@@ -1,0 +1,1 @@
+{"$id":"https://msac-navigator.invalid/schemas/trials.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"schema_version":{"const":1},"trials":{"items":{"$ref":"common.json#/$defs/trial"},"type":"array"}},"required":["trials","schema_version"],"type":"object"}

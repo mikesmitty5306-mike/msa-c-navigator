@@ -1,0 +1,1 @@
+{"$id":"https://msac-navigator.invalid/schemas/abstracts.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"abstracts":{"additionalProperties":{"minLength":1,"type":["string","null"]},"type":"object"},"schema_version":{"const":1}},"required":["abstracts","schema_version"],"type":"object"}

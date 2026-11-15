@@ -1,0 +1,6 @@
+# MSA-C Navigator is a personal app; please don't index it.
+# Note: on a GitHub Pages project site, crawlers only read robots.txt at the domain root
+# (https://<username>.github.io/robots.txt). The noindex meta tag in index.html is what
+# actually applies here; this file takes effect if the site is ever served from a domain root.
+User-agent: *
+Disallow: /
