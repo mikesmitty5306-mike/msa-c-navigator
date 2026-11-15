@@ -116,7 +116,12 @@ def test_grade_rewards_results_not_volume():
     results = analysis._empty_results()
     results["human"]["positive"] = 2
     results["animal"]["positive"] = 3
-    promising = analysis.MechanismScore(m, n_articles=20, results=results)
+    unchecked = analysis.MechanismScore(m, n_articles=20, results=results)
+    assert unchecked.grade == "C"          # B needs a key result: a controlled trial of >20 people improving UMSARS/imaging
+    key = analysis.CuratedResult(ids=("NCT00000009",), label="Trial X", title="Trial X", mechanism=m.id, outcome="positive",
+                                 randomized=True, placebo=True, phase="Phase 2", n=40, source="peer_reviewed", umsars="improved",
+                                 imaging=None, subtype="msa_general", year=2024, journal=None, url=None, note="Slowed UMSARS.")
+    promising = analysis.MechanismScore(m, n_articles=20, results=results, curated=[key], qualifying=[key])
     assert promising.grade == "B"
 
 

@@ -21,6 +21,8 @@ DEFINITIONS = {
     'solid_trial': 'A trial in people that was randomized and controlled (placebo, sham or comparison treatment), past the first safety stage, and not a pilot, open-label or single-group study.',
     'major_failure': "A solid human trial that found no benefit, or a trial stopped for futility, lack of effect, safety or its results. Trials stopped for funding or slow recruitment don't count.",
     'outcomes': "Positive, negative, mixed and unclear are what each treatment study's own conclusion says. Unclear includes studies that only reported safety.",
+    'grade_modifier': analysis.MODIFIER_MEANING,
+    'curated': "A few key human results are checked by hand. They replace the automatic verdict, count only toward the treatment's own mechanism, and are marked on the mechanism pages. Studies of 20 people or fewer are listed but don't count toward a grade.",
 }
 
 
@@ -52,6 +54,14 @@ def study(article):
         first_author=article.authors[0] if article.authors else None,url=article.url,evidence=article.evidence,
         outcome=analysis.OUTCOME_COUNT.get(article.outcome),solid=article.solid_trial,
         preprint=article.is_preprint,subtype=article.subtype)
+
+
+def curated_study(c, article=None):
+    """A hand-checked human result as a study row: from the database article when there is one, else from the entry."""
+    base = study(article) if article else dict(uid=c.key,title=c.title,year=c.year,journal=c.journal,first_author=None,
+        url=c.url,evidence='clinical',preprint=False,subtype=c.subtype)
+    return dict(base,evidence='clinical',outcome=c.outcome,solid=c.solid,curated=True,source=c.source,
+                design=c.design_text,note=c.note,counted=c.counts)
 
 
 def contact(value):
@@ -107,12 +117,16 @@ def documents(store, previous, *, build_time=None, cities_path=None, mechanism_i
         if value:
             dates.append(value)
     stamp = utc(build_time or max(filter(None,dates),default='1970-01-01T00:00:00Z'))
-    scores = analysis.rank_mechanisms(store,today=datetime.fromisoformat(stamp.replace('Z','+00:00')).date())
+    curated = analysis.load_curated()
+    by_curated = analysis.curated_index(curated)
+    scores = analysis.rank_mechanisms(store,today=datetime.fromisoformat(stamp.replace('Z','+00:00')).date(),curated=curated)
     if mechanism_ids is not None:
         scores = [s for s in scores if s.mechanism.id in mechanism_ids]
     allowed = {s.mechanism.id for s in scores}
-    atags = {k:sorted(set(v)&allowed) for k,v in store.all_tags('article').items()}
-    ttags = {k:sorted(set(v)&allowed) for k,v in store.all_tags('trial').items()}
+    # Hand-checked studies count toward their one mechanism only (analysis.restrict_tags).
+    atags = {k:sorted(set(v)&allowed) for k,v in analysis.restrict_tags(store.all_tags('article'),curated).items()}
+    ttags = {k:sorted(set(v)&allowed) for k,v in analysis.restrict_tags(store.all_tags('trial'),curated).items()}
+    by_article = {a.uid:a for a in articles}
     # The existing ranking is reused, with deterministic ID ties.
     ranking = sorted(analysis.rank_open_trials(store,scores),key=lambda r:(-r['score'],r['trial'].nct_id))
     ranks = {r['trial'].nct_id:dict(position=i,score=r['score'],target=r['target']) for i,r in enumerate(ranking,1)}
@@ -122,20 +136,28 @@ def documents(store, previous, *, build_time=None, cities_path=None, mechanism_i
     for score in scores:
         mech = score.mechanism
         grades.append(dict(id=mech.id,name=mech.name,kind=mech.kind,description=nullable(mech.description),
-            agents=list(mech.agents),grade=score.grade,reason=score.grade_reason,results=score.results,
+            agents=list(mech.agents),grade=score.grade,modifier=score.grade_modifier,reason=score.grade_reason,results=score.results,
             trials=score.trial_counts,activity=dict(papers=score.n_articles,msa_c_papers=score.n_msa_c,
                                                  recent_3y=score.n_recent,prior_3y=score.n_prior)))
         studies = {c:{o:[] for o in analysis.OUTCOME_KEYS} for c in analysis.RESULT_CATEGORIES}
         relevant = [a for a in articles if mech.id in atags.get(a.uid,[])]
         for a in relevant:
+            if a.uid in by_curated:
+                continue                                  # listed from its curated entry below
             category,outcome = analysis.EVIDENCE_TO_CATEGORY.get(a.evidence),analysis.OUTCOME_COUNT.get(a.outcome)
             if category and outcome:
                 studies[category][outcome].append(study(a))
+        # Hand-checked results first (counted ones before those of 20 people or fewer), in curated-file order.
+        for outcome in analysis.OUTCOME_KEYS:
+            checked = [curated_study(c,next((by_article[i] for i in c.ids if i in by_article),None))
+                       for c in sorted(score.curated,key=lambda c:not c.counts) if c.outcome==outcome]
+            studies['human'][outcome] = checked + studies['human'][outcome]
         groups = {g:sorted(ids) for g,ids in score.trial_groups.items()}
         groups['stopped'] = [dict(id=n,why_stopped=nullable(by_trial[n].why_stopped),
             counts_as_failure=mechanisms.trial_stopped_for_failure(by_trial[n].status,by_trial[n].why_stopped)) for n in groups['stopped']]
         files[f'mechanisms/{mech.id}.json'] = dict(schema_version=1,id=mech.id,studies=studies,trials=groups,
-                                               msa_c_recent=[study(a) for a in relevant if a.subtype=='msa_c'][:8])
+                                               msa_c_recent=[curated_study(by_curated[a.uid],a) if a.uid in by_curated else study(a)
+                                                             for a in relevant if a.subtype=='msa_c'][:8])
     files['grades.json'] = dict(schema_version=1,meanings=analysis.GRADE_MEANINGS,definitions=DEFINITIONS,mechanisms=grades)
     compact = []
     old_trials = {t['id']:t for t in previous.get('trials',[])}
@@ -161,7 +183,7 @@ def documents(store, previous, *, build_time=None, cities_path=None, mechanism_i
     library = defaultdict(list)
     abstracts = {f'{i:02x}':{} for i in range(256)}
     for a in articles:
-        s = study(a)
+        s = curated_study(by_curated[a.uid],a) if a.uid in by_curated else study(a)
         library[library_shard(a.year)].append([s[k] for k in LIB_COLUMNS[:5]] + [s['evidence'],s['outcome'],s['subtype'],
             s['preprint'],s['solid'],atags.get(a.uid,[]),s['url'],nullable(' '.join(sorted(set(a.keywords+a.mesh_terms))))])
         abstracts[hashlib.sha1(a.uid.encode()).hexdigest()[:2]][a.uid] = nullable(a.abstract)

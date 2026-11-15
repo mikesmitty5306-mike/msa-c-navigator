@@ -17,35 +17,51 @@ from test_core import NO_AUTH, STUDY  # noqa: E402
 from test_stepB import _fill  # noqa: E402
 
 MEANINGS = {
-    "A": "At least one solid human trial showed benefit, with no major failures.",
-    "B": "Promising human results from small or early studies, supported by animal or lab work.",
+    "A": "Benefit on UMSARS or brain imaging in at least two controlled human trials of more than 20 people, "
+         "with no major failures.",
+    "B": "Benefit on UMSARS or brain imaging in one controlled human trial of more than 20 people, not yet repeated, "
+         "supported by animal or lab work.",
     "C": "Promising results in animals or cells only, or mixed results in people.",
-    "D": "Little evidence so far, or human trials that failed or were stopped.",
+    "D": "Not yet shown to work in people.",
 }
 
 
-def score(kind="neuroinflammation", human=None, animal=None, in_vitro=None, solid_pos=0, solid_neg=0, failed=0):
+def key_result(i=0, source="peer_reviewed", n=40, randomized=True, placebo=True, umsars="improved", imaging=None,
+               outcome="positive", mechanism="neuroinflammation"):
+    return analysis.CuratedResult(ids=(f"NCT9{i:07d}",), label=f"Trial {i}", title=f"Trial {i}", mechanism=mechanism,
+                                  outcome=outcome, randomized=randomized, placebo=placebo, phase="Phase 2", n=n,
+                                  source=source, umsars=umsars, imaging=imaging, subtype="msa_general", year=2024,
+                                  journal=None, url=None, note=f"Trial {i} slowed UMSARS worsening.")
+
+
+def score(kind="neuroinflammation", human=None, animal=None, in_vitro=None, solid_pos=0, solid_neg=0, failed=0, keys=()):
     results = analysis._empty_results()
     for cat, counts in (("human", human), ("animal", animal), ("in_vitro", in_vitro)):
         results[cat].update(counts or {})
+    keys = list(keys)
+    results["human"]["positive"] += len(keys)          # key results are counted human results, as in rank_mechanisms
     return analysis.MechanismScore(
         mechanisms.BY_ID[kind], results=results, solid_positive=[f"p{i}" for i in range(solid_pos)],
-        solid_negative=[f"n{i}" for i in range(solid_neg)], failed_trials=[f"NCT{i}" for i in range(failed)])
+        solid_negative=[f"n{i}" for i in range(solid_neg)], failed_trials=[f"NCT{i}" for i in range(failed)],
+        curated=keys, qualifying=keys)
 
 
 # ---------------------------------------------------------------- the four rules
 @pytest.mark.parametrize("kwargs, grade, reason_part", [
-    # A: a solid human trial showed benefit, nothing major failed (small negative studies are allowed)
-    (dict(human={"positive": 1}, solid_pos=1), "A", "solid human trial showed benefit"),
-    (dict(human={"positive": 2, "negative": 1}, solid_pos=1), "A", "smaller study found no benefit"),
-    # a solid success plus a major failure is no longer an A: results point both ways
-    (dict(human={"positive": 1, "negative": 1}, solid_pos=1, solid_neg=1), "C", "Mixed in people"),
-    (dict(human={"positive": 1}, solid_pos=1, failed=1), "C", "stopped for futility"),
-    # B: small or early human benefit, backed by animal or lab work, nothing against it in people
-    (dict(human={"positive": 2}, animal={"positive": 3}), "B", "2 small or early human studies reported benefit"),
-    (dict(human={"positive": 1}, in_vitro={"positive": 1}), "B", "supported by 1 positive animal or lab study"),
+    # A: benefit repeated in two key results (controlled, >20 people, UMSARS/imaging better), nothing major failed
+    (dict(keys=[key_result(0), key_result(1)]), "A", "Benefit was repeated in 2 controlled human trials"),
+    (dict(keys=[key_result(0), key_result(1)], human={"negative": 1}), "A", "smaller study found no benefit"),
+    # two key results plus a major failure is no longer an A: results point both ways
+    (dict(keys=[key_result(0), key_result(1)], human={"negative": 1}, solid_neg=1), "C", "Mixed in people"),
+    (dict(keys=[key_result(0), key_result(1)], failed=1), "C", "stopped for futility"),
+    # B: one key result, backed by animal or lab work, nothing against it in people. The Why line names the trial.
+    (dict(keys=[key_result(0)], animal={"positive": 3}), "B", "Trial 0 (randomized, placebo-controlled, Phase 2, 40 people)"),
+    (dict(keys=[key_result(0)], in_vitro={"positive": 1}), "B", "Not yet repeated in a second controlled trial"),
+    # a keyword "solid" success alone is no longer enough: the key result must be hand-checked
+    (dict(human={"positive": 1}, solid_pos=1, animal={"positive": 2}), "C", "none is yet a controlled trial of more than 20 people"),
+    (dict(human={"positive": 2}, animal={"positive": 3}), "C", "none is yet a controlled trial"),
     # C: human benefit without any lab support; mixed in people; animals or cells only
-    (dict(human={"positive": 1}), "C", "no animal or lab study supports it"),
+    (dict(keys=[key_result(0)]), "C", "no animal or lab study supports it"),
     (dict(human={"positive": 1, "negative": 2}, animal={"positive": 5}), "C", "Mixed in people"),
     (dict(human={"mixed": 1}), "C", "gave mixed results"),
     (dict(animal={"positive": 4}, in_vitro={"positive": 1}), "C", "5 animal or lab studies reported benefit"),

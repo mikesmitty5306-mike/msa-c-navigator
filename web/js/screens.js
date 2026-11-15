@@ -6,7 +6,7 @@ import {
   CATEGORY_LABELS, CATEGORY_SLUGS, EVIDENCE_LABELS, FIT_LABELS, OUTCOME_GROUPS, SUBTYPE_LABELS, TRIAL_GROUP_LABELS,
   cityLabel, filterLibrary, filterTrials, rowsToObjects, savedStatusChange, statusLabel, trialCountries,
 } from "./logic.js";
-import { errorBox, fitBadge, gradeBadge, paperRow, resultsSummary, star, statusBadge, trialRow } from "./views.js";
+import { errorBox, fitBadge, gradeBadge, gradeLabel, paperRow, resultsSummary, star, statusBadge, trialRow } from "./views.js";
 import { NOTE_MAX } from "./store.js";
 
 const KIND_LABELS = [["mechanism", "Disease mechanisms"], ["symptomatic", "Symptom treatment"], ["biomarker", "Biomarkers (not graded)"]];
@@ -95,12 +95,24 @@ export async function gradesList(ctx) {
     body: html`<h1>Evidence grades</h1>
       <p class="lead">Each area of MSA biology gets a letter for how treatments aimed at it have done in published studies.
         Tap a category to see the studies behind it.</p>
+      ${promisingStrip(g)}
       <p><a class="more-link" href="#/grades/help">What the grades mean →</a></p>
       ${KIND_LABELS.map(([kind, label]) => html`<h2>${label}</h2><div class="mech-list">
         ${g.mechanisms.filter((m) => m.kind === kind).map((m) => html`<article class="mech-card">
           <div class="mech-head">${gradeBadge(m, g.meanings)}<div><h3><a href="#/grades/${m.id}">${m.name}</a></h3>
             <p class="grade-meaning">${g.meanings[m.grade]}</p></div></div>${resultsSummary(m)}</article>`)}</div>`)}`,
   };
+}
+
+/** "Most promising so far": mechanisms graded A or B, best first, each with its Why line. */
+function promisingStrip(g) {
+  const top = g.mechanisms.filter((m) => m.grade === "A" || m.grade === "B");
+  return html`<section class="promising" aria-labelledby="promising-title">
+    <h2 id="promising-title">Most promising so far</h2>
+    ${top.length ? html`<ul class="plain">${top.map((m) => html`<li class="promising-item">${gradeBadge(m, g.meanings, true)}
+      <div><a href="#/grades/${m.id}">${m.name}</a><span class="grade-meaning">${m.reason}</span></div></li>`)}</ul>`
+      : html`<p class="meta">No area has reached grade A or B yet.</p>`}
+  </section>`;
 }
 
 export async function gradesHelp(ctx) {
@@ -117,6 +129,8 @@ export async function gradesHelp(ctx) {
         ${d.solid_trial ? html`<li><strong>Solid human trial:</strong> ${d.solid_trial}</li>` : ""}
         ${d.major_failure ? html`<li><strong>Major failure:</strong> ${d.major_failure}</li>` : ""}
         ${d.outcomes ? html`<li><strong>Positive, negative, mixed, unclear:</strong> ${d.outcomes}</li>` : ""}
+        ${d.grade_modifier ? html`<li><strong>+ and −:</strong> ${d.grade_modifier}</li>` : ""}
+        ${d.curated ? html`<li><strong>Checked by hand:</strong> ${d.curated}</li>` : ""}
         <li><strong>Animal models</strong> are studies in mice, rats, flies and so on. <strong>In vitro</strong> means cells or proteins in the lab.</li>
       </ul>
       <h2>Please keep in mind</h2>
@@ -143,7 +157,7 @@ export async function mechanism(ctx, id) {
   return {
     title: m.name, section: "grades", back: "#/grades",
     body: html`<div class="title-row">${gradeBadge(m, g.meanings)}<h1>${m.name}</h1></div>
-      <p class="grade-meaning big">Grade ${m.grade}: ${g.meanings[m.grade]}</p>
+      <p class="grade-meaning big">Grade ${gradeLabel(m)}: ${g.meanings[m.grade]}</p>
       <p class="why"><strong>Why:</strong> ${m.reason}</p>
       <p><a class="more-link" href="#/grades/help">What the grades mean →</a></p>
       <h2>Results, by kind of study</h2>
@@ -192,7 +206,7 @@ export async function results(ctx, id, slug) {
   } else {
     const byOutcome = detail.studies[cat] || {};
     groups = html`<p class="meta">Treatment studies only, read automatically from each paper's conclusion. Labels can be wrong;
-      open a paper to check.</p>${Object.keys(OUTCOME_GROUPS).map((key) => {
+      open a paper to check. Studies marked "Checked by hand" were reviewed manually.</p>${Object.keys(OUTCOME_GROUPS).map((key) => {
       const list = byOutcome[key] || [];
       const total = m.results[cat] ? m.results[cat][key] : list.length;
       return html`<details class="result-group" ${list.length && list.length <= 15 ? "open" : ""}>
@@ -206,7 +220,7 @@ export async function results(ctx, id, slug) {
     title: `${CATEGORY_LABELS[cat]} · ${m.name}`, section: "grades", back: `#/grades/${id}`,
     body: html`<p class="crumb"><a href="#/grades/${id}">‹ ${m.name}</a></p>
       <div class="title-row">${gradeBadge(m, g.meanings)}<h1>${CATEGORY_LABELS[cat]}</h1></div>
-      <p class="grade-meaning">Grade ${m.grade}: ${g.meanings[m.grade]}</p>${nav}${groups}`,
+      <p class="grade-meaning">Grade ${gradeLabel(m)}: ${g.meanings[m.grade]}</p>${nav}${groups}`,
   };
 }
 

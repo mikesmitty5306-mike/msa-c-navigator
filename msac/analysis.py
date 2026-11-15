@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import date
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
+from . import config
 from . import mechanisms as mech
 from .models import Trial
 from .storage import Store
@@ -25,14 +29,123 @@ _STATUS_WEIGHT = {
 
 # ---------------------------------------------------------------- grades (plain-language rules)
 GRADE_MEANINGS = {
-    "A": "At least one solid human trial showed benefit, with no major failures.",
-    "B": "Promising human results from small or early studies, supported by animal or lab work.",
+    "A": "Benefit on UMSARS or brain imaging in at least two controlled human trials of more than 20 people, "
+         "with no major failures.",
+    "B": "Benefit on UMSARS or brain imaging in one controlled human trial of more than 20 people, not yet repeated, "
+         "supported by animal or lab work.",
     "C": "Promising results in animals or cells only, or mixed results in people.",
-    "D": "Little evidence so far, or human trials that failed or were stopped.",
+    "D": "Not yet shown to work in people.",
     "n/a": "Not graded: biomarkers are tests, not treatments.",
 }
 GRADE_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "n/a": 4}
 GRADE_VALUE = {"A": 1.0, "B": 0.75, "C": 0.5, "D": 0.25}       # used only to rank recruiting trials
+MODIFIER_MEANING = ("+ means the key result is published in a peer-reviewed journal; − means it has so far only been "
+                    "reported by the company running the trial. It never changes the letter.")
+MIN_PARTICIPANTS = 21               # a human result counts toward a grade only with more than 20 people
+
+# ---------------------------------------------------------------- hand-checked key results
+CURATED_PATH = config.APP_DIR / "contract" / "curated_results.json"
+_ENDPOINTS = {"improved", "no_benefit", None}
+
+
+@dataclass(frozen=True)
+class CuratedResult:
+    """A hand-checked human result (contract/curated_results.json). It replaces the keyword verdict for the same
+    study and counts toward its one mechanism only."""
+    ids: tuple[str, ...]
+    label: str
+    title: str
+    mechanism: str
+    outcome: str
+    randomized: bool
+    placebo: bool
+    phase: str | None
+    n: int | None
+    source: str
+    umsars: str | None
+    imaging: str | None
+    subtype: str
+    year: int | None
+    journal: str | None
+    url: str | None
+    note: str
+
+    @property
+    def key(self) -> str:
+        return self.ids[0]
+
+    @property
+    def counts(self) -> bool:
+        """More than 20 participants: smaller studies are listed but don't move the grade."""
+        return self.n is not None and self.n >= MIN_PARTICIPANTS
+
+    @property
+    def controlled(self) -> bool:
+        return self.randomized and self.placebo
+
+    @property
+    def solid(self) -> bool:
+        return self.controlled and self.counts
+
+    @property
+    def peer_reviewed(self) -> bool:
+        return self.source == "peer_reviewed"
+
+    @property
+    def qualifies(self) -> bool:
+        """The key result behind a B (one) or an A (two or more): a controlled trial of more than 20 people that
+        improved UMSARS or brain imaging."""
+        return self.outcome == "positive" and self.solid and "improved" in (self.umsars, self.imaging)
+
+    @property
+    def design_text(self) -> str:
+        parts = [("randomized, placebo-controlled" if self.controlled else "randomized" if self.randomized else "open-label")]
+        if self.phase:
+            parts.append(self.phase)
+        if self.n is not None:
+            parts.append(f"{self.n} people")
+        return ", ".join(parts)
+
+    @property
+    def summary(self) -> str:
+        """Used in the Why line: 'ATH434-201 (randomized, placebo-controlled, Phase 2, 77 people; company-reported,
+        not yet peer-reviewed)'."""
+        flag = "" if self.peer_reviewed else "; company-reported, not yet peer-reviewed"
+        return f"{self.label} ({self.design_text}{flag})"
+
+
+def load_curated(path: Path | str | None = None) -> tuple[CuratedResult, ...]:
+    path = Path(path) if path else CURATED_PATH
+    return _load_curated(str(path), path.stat().st_mtime_ns if path.exists() else 0)
+
+
+@lru_cache(maxsize=8)
+def _load_curated(path: str, _mtime: int) -> tuple[CuratedResult, ...]:
+    p = Path(path)
+    if not p.exists():
+        return ()
+    out = []
+    for e in json.loads(p.read_text(encoding="utf-8"))["results"]:
+        d, ep = e["design"], e.get("endpoints") or {}
+        if e["mechanism"] not in mech.BY_ID or e["outcome"] not in OUTCOME_KEYS or e["source"] not in ("peer_reviewed", "company_topline") \
+                or ep.get("umsars") not in _ENDPOINTS or ep.get("imaging") not in _ENDPOINTS or not e["ids"]:
+            raise ValueError(f"Invalid curated result: {e.get('label') or e.get('ids')}")
+        out.append(CuratedResult(ids=tuple(e["ids"]), label=e["label"], title=e["title"], mechanism=e["mechanism"],
+                                 outcome=e["outcome"], randomized=bool(d["randomized"]), placebo=bool(d["placebo"]),
+                                 phase=d.get("phase"), n=d.get("n"), source=e["source"], umsars=ep.get("umsars"),
+                                 imaging=ep.get("imaging"), subtype=e.get("subtype") or "msa_general", year=e.get("year"),
+                                 journal=e.get("journal"), url=e.get("url"), note=e["note"]))
+    return tuple(out)
+
+
+def curated_index(curated: tuple[CuratedResult, ...]) -> dict[str, CuratedResult]:
+    return {i: c for c in curated for i in c.ids}
+
+
+def restrict_tags(tags: dict[str, list[str]], curated: tuple[CuratedResult, ...]) -> dict[str, list[str]]:
+    """Curated studies (articles or trials) count toward their one mechanism only."""
+    index = curated_index(curated)
+    return {k: ([index[k].mechanism] if k in index else v) for k, v in tags.items()}
 
 RESULT_CATEGORIES = ("human", "animal", "in_vitro")
 CATEGORY_LABELS = {"human": "Human", "animal": "Animal models", "in_vitro": "In vitro (cell/lab)", "trials": "Trials"}
@@ -84,6 +197,8 @@ class MechanismScore:
     solid_negative: list[str] = field(default_factory=list)     # solid human trials that showed no benefit
     trial_groups: dict[str, list[str]] = field(default_factory=lambda: {g: [] for g in TRIAL_GROUPS})
     failed_trials: list[str] = field(default_factory=list)      # stopped for futility, efficacy, safety or results
+    curated: list[CuratedResult] = field(default_factory=list)  # hand-checked results for this mechanism
+    qualifying: list[CuratedResult] = field(default_factory=list)   # key results: controlled, >20 people, UMSARS/imaging better
 
     @property
     def human(self) -> dict[str, int]:
@@ -99,26 +214,38 @@ class MechanismScore:
 
     @property
     def grade(self) -> str:
-        """Plain-language rules (see GRADE_MEANINGS and reports/stepF_grades.txt):
-        A  a solid human trial showed benefit and nothing major failed
-        B  human benefit only from small/early studies, backed by animal or lab results, and no human failures
-        C  benefit in animals or cells only, or human results that point both ways
+        """Plain-language rules (see GRADE_MEANINGS). A "key result" is a hand-checked, controlled human trial of
+        more than 20 people whose results improved UMSARS or brain imaging (CuratedResult.qualifies).
+        A  two or more key results (replicated) and nothing major failed
+        B  one key result, backed by animal or lab results, and no human failures
+        C  benefit in animals or cells only, or human benefit not (yet) shown as a key result, or results both ways
         D  nothing positive yet, or human evidence that is only negative (including stopped trials)
         """
         if self.mechanism.kind == "biomarker":
             return "n/a"
         h = self.human
-        if self.solid_positive and not self.major_failures:
+        if len(self.qualifying) >= 2 and not self.major_failures:
             return "A"
         if h["positive"]:
             if h["negative"] or h["mixed"] or self.major_failures:
                 return "C"                       # mixed results in people
-            return "B" if self.lab_positive else "C"
+            return "B" if self.qualifying and self.lab_positive else "C"
         if h["negative"] or self.major_failures:
             return "D"                           # human trials failed or were stopped
         if h["mixed"] or self.lab_positive:
             return "C"
         return "D"                               # little evidence so far
+
+    @property
+    def grade_modifier(self) -> str | None:
+        """+ if a key result behind an A or B is peer-reviewed, - if all are company-reported only."""
+        if self.grade not in ("A", "B"):
+            return None
+        return "+" if any(c.peer_reviewed for c in self.qualifying) else "-"
+
+    @property
+    def grade_label(self) -> str:
+        return self.grade + {"+": "+", "-": "−"}.get(self.grade_modifier or "", "")
 
     @property
     def grade_meaning(self) -> str:
@@ -137,11 +264,13 @@ class MechanismScore:
             extra = ""
             if h["negative"]:
                 extra = " (" + _n(h["negative"], "smaller study", "smaller studies") + " found no benefit)"
-            return _n(len(self.solid_positive), "solid human trial", "solid human trials") + \
-                " showed benefit and no major trial failed" + extra + "."
+            return ("Benefit was repeated in " + _n(len(self.qualifying), "controlled human trial", "controlled human trials") +
+                    ": " + "; ".join(c.summary for c in self.qualifying) + ". No major trial failed" + extra + ".")
         if g == "B":
-            return (_n(h["positive"], "small or early human study", "small or early human studies") + " reported benefit, "
-                    "supported by " + _n(lab, "positive animal or lab study", "positive animal or lab studies") + ".")
+            key = self.qualifying[0]
+            return (f"{key.summary}: {key.note.rstrip('.')}. Supported by "
+                    + _n(lab, "positive animal or lab study", "positive animal or lab studies")
+                    + ". Not yet repeated in a second controlled trial.")
         if g == "C" and h["positive"]:
             if h["negative"] or h["mixed"] or self.major_failures:
                 against = []
@@ -155,6 +284,9 @@ class MechanismScore:
                     against.append(stopped)
                 return ("Mixed in people: " + _n(h["positive"], "human study", "human studies") +
                         " reported benefit, but " + "; ".join(against) + ".")
+            if not self.qualifying:
+                return (_n(h["positive"], "human study", "human studies") + " reported benefit, but none is yet a controlled "
+                        "trial of more than 20 people showing better UMSARS scores or brain imaging.")
             return _n(h["positive"], "human study", "human studies") + " reported benefit, but no animal or lab study supports it yet."
         if g == "C" and h["mixed"]:
             return "Mixed in people: " + _n(h["mixed"], "human study", "human studies") + " gave mixed results."
@@ -181,8 +313,8 @@ class MechanismScore:
         if self.mechanism.kind == "biomarker":
             return (1, 0, -self.score)
         h = self.human
-        return (0, GRADE_ORDER[self.grade], -len(self.solid_positive), -h["positive"], -self.lab_positive,
-                self.major_failures, h["negative"], -self.n_articles)
+        return (0, GRADE_ORDER[self.grade], {"+": 0, "-": 1}.get(self.grade_modifier or "", 2), -len(self.qualifying),
+                -len(self.solid_positive), -h["positive"], -self.lab_positive, self.major_failures, h["negative"], -self.n_articles)
 
     @property
     def momentum(self) -> float | None:
@@ -204,7 +336,8 @@ class MechanismScore:
         return {0: "—", 0.5: "Early Phase 1", 1: "Phase 1", 2: "Phase 2", 3: "Phase 3"}.get(self.max_phase, "—")
 
 
-def rank_mechanisms(store: Store, today: date | None = None, kinds: tuple[str, ...] | None = None) -> list[MechanismScore]:
+def rank_mechanisms(store: Store, today: date | None = None, kinds: tuple[str, ...] | None = None,
+                    curated: tuple[CuratedResult, ...] | None = None) -> list[MechanismScore]:
     """Score each mechanism from tagged literature and trials.
 
     literature_score = Σ recency_weight × evidence_weight × (1.5 if MSA-C specific)
@@ -216,11 +349,14 @@ def rank_mechanisms(store: Store, today: date | None = None, kinds: tuple[str, .
     year = (today or date.today()).year
     scores = {m.id: MechanismScore(m) for m in mech.TAXONOMY if not kinds or m.kind in kinds}
     facts = {r["uid"]: r for r in store.article_facts()}
+    curated = load_curated() if curated is None else curated
+    by_id = curated_index(curated)
 
-    for uid, mids in store.all_tags("article").items():
+    for uid, mids in restrict_tags(store.all_tags("article"), curated).items():
         f = facts.get(uid)
         if f is None:
             continue
+        is_curated = uid in by_id                 # its result is counted from the curated entry below
         age = max(year - (f["year"] or year), 0)
         weight = 0.5 ** (age / RECENCY_HALF_LIFE_YEARS) * mech.EVIDENCE_WEIGHT.get(f["evidence"], 0.75)
         if f["subtype"] == "msa_c":
@@ -232,7 +368,7 @@ def rank_mechanisms(store: Store, today: date | None = None, kinds: tuple[str, .
             s.n_articles += 1
             s.literature_score += weight
             outcome, category = f["outcome"] or "na", EVIDENCE_TO_CATEGORY.get(f["evidence"])
-            if category and outcome in OUTCOME_COUNT:
+            if category and outcome in OUTCOME_COUNT and not is_curated:
                 s.results[category][OUTCOME_COUNT[outcome]] += 1
                 if category == "human" and f["solid"]:
                     if outcome == "positive":
@@ -247,8 +383,24 @@ def rank_mechanisms(store: Store, today: date | None = None, kinds: tuple[str, .
             elif f["year"] and 3 <= year - f["year"] < 6:
                 s.n_prior += 1
 
+    # Hand-checked results: one mechanism each; studies of 20 people or fewer are listed but don't count.
+    for c in curated:
+        s = scores.get(c.mechanism)
+        if s is None:
+            continue
+        s.curated.append(c)
+        if not c.counts:
+            continue
+        s.results["human"][c.outcome] += 1
+        if c.qualifies:
+            s.qualifying.append(c)
+        if c.solid and c.outcome == "positive":
+            s.solid_positive.append(c.key)
+        elif c.solid and c.outcome == "negative":
+            s.solid_negative.append(c.key)
+
     trials = {t.nct_id: t for t in store.iter_trials()}
-    for nct, mids in store.all_tags("trial").items():
+    for nct, mids in restrict_tags(store.all_tags("trial"), curated).items():
         t = trials.get(nct)
         if t is None:
             continue

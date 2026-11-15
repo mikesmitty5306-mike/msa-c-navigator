@@ -1,7 +1,7 @@
 // MSA-C Navigator service worker: offline use, data caching and push notifications.
 // Bump VERSION whenever any file in SHELL changes, so phones pick up the new app.
 
-const VERSION = "2026-11-14.4";
+const VERSION = "2026-11-15.1";
 const SHELL_CACHE = `msac-shell-${VERSION}`;
 const DATA_CACHE = "msac-data-v1";
 const META_TIMEOUT_MS = 4000;

@@ -62,14 +62,18 @@ def write(path, value):
 
 
 def schemas():
+    # curated/source/design/note/counted: hand-checked results (contract/curated_results.json); optional.
     study = obj(dict(uid=S,title=N,year=NI,journal=N,first_author=N,url=N,evidence=EVIDENCE,
-                     outcome=OUTCOME,solid=B,preprint=B,subtype=SUBTYPE))
+                     outcome=OUTCOME,solid=B,preprint=B,subtype=SUBTYPE,curated=B,
+                     source={'enum':['peer_reviewed','company_topline']},design=S,note=S,counted=B),
+                optional=('curated','source','design','note','counted'))
     contact = obj({k: N for k in ['name','role','phone','phone_ext','email']})
     site = obj(dict(facility=N,city=N,state=N,country=N,status=nullable(STATUS),lat=NUM,lon=NUM,contacts=arr(ref('contact'))))
     result = obj({c: obj({o: I for o in OUTCOMES}) for c in CATEGORIES})
     grade = obj(dict(id=S,name=S,kind={'enum':['mechanism','symptomatic','biomarker']},description=N,agents=arr(S),
-        grade={'enum':['A','B','C','D','n/a']},reason=S,results=result,trials=obj({g:I for g in GROUPS}),
-        activity=obj({k:I for k in ['papers','msa_c_papers','recent_3y','prior_3y']})))
+        grade={'enum':['A','B','C','D','n/a']},modifier={'enum':['+','-',None]},reason=S,results=result,
+        trials=obj({g:I for g in GROUPS}),activity=obj({k:I for k in ['papers','msa_c_papers','recent_3y','prior_3y']})),
+        optional=('modifier',))
     compact = obj(dict(id=S,title=N,status=STATUS,status_label=S,open=B,active=B,phase=S,
         max_phase={'enum':[0,0.5,1,2,3]},type=N,sponsor=N,fit=FIT,mechanisms=arr(S),min_age=NUM,max_age=NUM,sex=N,
         sites=arr(tuple_row([NUM,NUM,N,N,B])),last_update=DATE,
@@ -85,7 +89,8 @@ def schemas():
             data_as_of=obj({k:TIME for k in ['clinicaltrials','pubmed','europepmc']}),push_public_key=N),version=True,
             optional=('data_as_of','push_public_key')),
         'grades': obj(dict(meanings=obj({k:S for k in ['A','B','C','D','n/a']}),
-            definitions=obj({k:S for k in ['solid_trial','major_failure','outcomes']}),mechanisms=arr(ref('grade'))),version=True),
+            definitions=obj({k:S for k in ['solid_trial','major_failure','outcomes','grade_modifier','curated']},
+                            optional=('grade_modifier','curated')),mechanisms=arr(ref('grade'))),version=True),
         'mechanism': obj(dict(id=S,studies=obj({c:obj({o:arr(ref('study')) for o in OUTCOMES}) for c in CATEGORIES}),
             trials=obj({g:arr(obj(dict(id=S,why_stopped=N,counts_as_failure=B)) if g=='stopped' else S) for g in GROUPS}),
             msa_c_recent=dict(arr(ref('study')),maxItems=8)),version=True),

@@ -3,10 +3,21 @@
 import { html, fmtMiles, plural } from "./util.js";
 import { CATEGORY_LABELS, EVIDENCE_LABELS, FIT_LABELS, OUTCOME_LABELS } from "./logic.js";
 
+const MODIFIER_TEXT = { "+": "+", "-": "−" };
+const MODIFIER_WORDS = { "+": " plus", "-": " minus" };
+
+/** "B+", "B−" or "C": the letter plus its peer-review modifier, when it has one. */
+export function gradeLabel(m) {
+  const g = m.grade || "n/a";
+  return g + (MODIFIER_TEXT[m.modifier] || "");
+}
+
 export function gradeBadge(m, meanings, small = false) {
   const g = m.grade || "n/a";
   const cls = g === "n/a" ? "na" : g;
-  return html`<span class="grade grade-${cls}${small ? " sm" : ""}" title="Grade ${g}: ${meanings[g] || ""}" aria-label="Grade ${g}">${g}</span>`;
+  const label = gradeLabel(m);
+  return html`<span class="grade grade-${cls}${small ? " sm" : ""}${label.length > 1 && g !== "n/a" ? " mod" : ""}"
+    title="Grade ${label}: ${meanings[g] || ""}" aria-label="Grade ${g}${MODIFIER_WORDS[m.modifier] || ""}">${label}</span>`;
 }
 
 export function fitBadge(fit) {
@@ -59,7 +70,7 @@ export function paperRow(store, p, { grades = null, tags = null } = {}) {
   const mechs = tags || p.mechanisms || [];
   const chips = grades && mechs.length ? html`<div>${mechs.map((id) => {
     const m = grades.byId[id];
-    return m ? html`<a class="chip" href="#/grades/${id}">${m.name}${m.grade !== "n/a" ? ` · ${m.grade}` : ""}</a>` : "";
+    return m ? html`<a class="chip" href="#/grades/${id}">${m.name}${m.grade !== "n/a" ? ` · ${gradeLabel(m)}` : ""}</a>` : "";
   })}</div>` : "";
   const title = p.title || "(untitled)";
   const link = p.url ? html`<a href="${p.url}" target="_blank" rel="noopener">${title}</a>` : html`<span class="item-title">${title}</span>`;
@@ -69,10 +80,15 @@ export function paperRow(store, p, { grades = null, tags = null } = {}) {
       ${p.preprint ? html`<span class="badge warn">Preprint, not peer reviewed</span>` : ""}
       <span class="badge">${EVIDENCE_LABELS[p.evidence] || p.evidence || ""}</span>
       ${p.subtype === "msa_c" ? html`<span class="badge fit-includes_msa_c">MSA-C</span>` : ""}
-      ${p.solid ? html`<span class="badge solid">Solid trial</span>` : ""}${outcome}</div>
+      ${p.solid ? html`<span class="badge solid">Solid trial</span>` : ""}${outcome}
+      ${p.curated ? html`<span class="badge curated">Checked by hand</span>` : ""}
+      ${p.source === "company_topline" ? html`<span class="badge warn">Company-reported, not yet peer-reviewed</span>` : ""}</div>
+    ${p.curated ? html`<p class="curated-note">${p.design ? html`<span class="meta">${p.design}.</span> ` : ""}${p.note || ""}
+      ${p.counted === false ? html`<span class="meta">20 people or fewer: listed, but not counted in the grade.</span>` : ""}</p>` : ""}
     ${chips}
-    <button type="button" class="secondary abstract-btn" data-action="abstract" data-uid="${p.uid}" aria-expanded="false">Show abstract</button>
-    <div class="abstract" data-abstract-for="${p.uid}" hidden></div></li>`;
+    ${p.curated && !String(p.uid).includes(":") ? "" : html`<button type="button" class="secondary abstract-btn" data-action="abstract"
+      data-uid="${p.uid}" aria-expanded="false">Show abstract</button>
+    <div class="abstract" data-abstract-for="${p.uid}" hidden></div>`}</li>`;
 }
 
 export function errorBox(err, retryHash = null) {

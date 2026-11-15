@@ -1,0 +1,76 @@
+{
+  "about": "Hand-checked key human results. Each entry overrides the automatic keyword verdict for the same study and counts toward its one mechanism only (the treatment's own mechanism). Read by msac/analysis.py; grading rules are in analysis.MechanismScore.grade.",
+  "fields": {
+    "ids": "Every identifier of the same study (PMID as pmid:N, DOI as doi:..., ClinicalTrials.gov NCT number, or URL). The first is the study's key.",
+    "label": "Short name used in the grade's Why line.",
+    "mechanism": "The treatment's own mechanism id (msac/mechanisms.py).",
+    "outcome": "positive | negative | mixed | unclear",
+    "design": "randomized and placebo (true/false), phase, n (participants), n_source (where n comes from).",
+    "source": "peer_reviewed | company_topline",
+    "endpoints": "umsars and imaging: improved | no_benefit | null (null = not recorded here).",
+    "note": "One line, shown on the mechanism page."
+  },
+  "version": 1,
+  "results": [
+    {
+      "ids": ["NCT05109091"],
+      "label": "ATH434-201",
+      "title": "ATH434-201: ATH434 in multiple system atrophy (Phase 2)",
+      "mechanism": "oxidative_iron",
+      "outcome": "positive",
+      "design": {"randomized": true, "placebo": true, "phase": "Phase 2", "n": 77, "n_source": "hand-checked"},
+      "source": "company_topline",
+      "endpoints": {"umsars": "improved", "imaging": null},
+      "subtype": "msa_general",
+      "year": null,
+      "journal": null,
+      "url": "https://clinicaltrials.gov/study/NCT05109091",
+      "note": "50 mg showed a significant benefit on UMSARS part I; 75 mg did not."
+    },
+    {
+      "ids": ["NCT05864365"],
+      "label": "ATH434-202",
+      "title": "ATH434-202: open-label ATH434 study in multiple system atrophy (Phase 2)",
+      "mechanism": "oxidative_iron",
+      "outcome": "positive",
+      "design": {"randomized": false, "placebo": false, "phase": "Phase 2", "n": 10, "n_source": "ClinicalTrials.gov enrollment"},
+      "source": "company_topline",
+      "endpoints": {"umsars": null, "imaging": null},
+      "subtype": "msa_general",
+      "year": null,
+      "journal": null,
+      "url": "https://clinicaltrials.gov/study/NCT05864365",
+      "note": "Open-label Phase 2; the company reported the results as positive."
+    },
+    {
+      "ids": ["pmid:22829267", "doi:10.1002/ana.23612", "NCT00911365"],
+      "label": "Lee 2012, Annals of Neurology",
+      "title": "A randomized trial of mesenchymal stem cells in multiple system atrophy.",
+      "mechanism": "neurotrophic",
+      "outcome": "positive",
+      "design": {"randomized": true, "placebo": true, "phase": "Phase 2", "n": 33, "n_source": "hand-checked (ClinicalTrials.gov lists 27)"},
+      "source": "peer_reviewed",
+      "endpoints": {"umsars": "improved", "imaging": null},
+      "subtype": "msa_c",
+      "year": 2012,
+      "journal": "Annals of Neurology",
+      "url": "https://doi.org/10.1002/ana.23612",
+      "note": "Mesenchymal stem cells slowed UMSARS worsening compared with placebo in people with MSA-C."
+    },
+    {
+      "ids": ["pmid:31278067", "NCT02008721"],
+      "label": "PROMESA (EGCG)",
+      "title": "Safety and efficacy of epigallocatechin gallate in multiple system atrophy (PROMESA).",
+      "mechanism": "asyn_aggregation",
+      "outcome": "negative",
+      "design": {"randomized": true, "placebo": true, "phase": "Phase 3", "n": 92, "n_source": "ClinicalTrials.gov enrollment"},
+      "source": "peer_reviewed",
+      "endpoints": {"umsars": "no_benefit", "imaging": null},
+      "subtype": "msa_general",
+      "year": 2019,
+      "journal": "The Lancet Neurology",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/31278067/",
+      "note": "EGCG did not slow UMSARS worsening compared with placebo. Counted for α-synuclein aggregation only."
+    }
+  ]
+}
